@@ -169,11 +169,11 @@ Deploying immutable artifacts improves:
 
 ### Reliability
 
-The exact same image tested in CI is what runs in production.
+The exact same image tested in CI is what runs in production
 
 ### Rollbacks
 
-Previous image versions can be redeployed instantly without rebuilding.
+Previous image versions can be redeployed instantly without rebuilding
 
 ### Traceability
 

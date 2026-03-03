@@ -1,194 +1,277 @@
+Alright. Here’s your **PR-ready `README.md` content** for
+
+# [Learning Concept-3] CI/CD Pipeline Execution Model & Responsibility Boundaries
+
+Clean. Structured. Clear separation thinking. This is how a production engineer would explain it. 🚀
+
+---
+
+# CI/CD Pipeline Execution Model & Responsibility Boundaries
+
 ## Overview
 
-This document explains the complete lifecycle of an application artifact — from a Git commit to running containers inside a Kubernetes cluster
----
+This document explains:
 
-# 1️⃣ Artifact Flow Explanation
+* How CI and CD pipelines execute
+* Where builds, tests, artifacts, and deployments happen
+* How responsibilities are divided between application code, pipelines, and infrastructure
+* Why separation of responsibilities protects production systems
 
-## Step 1: Git Commit / PR Merge → CI Trigger
-
-When a developer pushes code or merges a Pull Request into the `main` branch, a webhook event triggers the CI pipeline.
-
-Example GitHub Actions trigger:
-
-```yaml
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-```
-
-The CI system automatically starts the workflow. No manual deployment is required.
+Modern DevOps systems work because responsibilities are clearly defined and enforced.
 
 ---
 
-## Step 2: CI Pipeline Builds Docker Image
+# 1️⃣ CI vs CD Responsibilities
 
-Inside the CI pipeline:
+## Continuous Integration (CI)
 
-1. Repository source code is checked out.
-2. Dependencies are installed.
-3. Automated tests are executed.
-4. If tests pass, a Docker image is built.
+CI is responsible for **validating code changes before merge**.
 
-Example:
+CI answers:
 
-```bash
-docker build -t my-app:latest .
-```
+> “Is this code safe to integrate?”
 
-The `Dockerfile` defines:
+### CI Responsibilities
 
-* Base runtime image
-* Application dependencies
-* Build steps
-* Startup command
+* Checkout source code
+* Run unit tests
+* Run linting/static checks
+* Build artifacts (e.g., Docker image)
+* Tag images
+* Push images to registry
+* Fail fast if validation fails
 
-This process creates an immutable Docker image containing:
+### What CI Should NOT Do
 
-* Application code
-* Runtime
-* Dependencies
-* Configuration
+* Deploy directly to production
+* Modify live infrastructure
+* Restart Kubernetes workloads
+* Bypass artifact creation
 
----
-
-## Step 3: Image Tagging & Digest
-
-During the build process, the image is tagged.
-
-Common strategies:
-
-* `latest`
-* Git commit SHA
-* Semantic version (e.g., v1.0.0)
-
-Example:
-
-```bash
-docker tag my-app my-registry/my-app:${GITHUB_SHA}
-```
-
-Each image also gets a **digest** (SHA256 hash).
-
-* **Tag** → Human-readable label
-* **Digest** → Cryptographic identity of the image contents
-
-Tags can move. Digests are immutable.
+CI builds confidence — it does not release software.
 
 ---
 
-## Step 4: Push to Container Registry
+## Continuous Deployment (CD)
 
-After tagging, CI authenticates and pushes the image to a container registry.
+CD is responsible for **deploying validated artifacts safely to environments**.
 
-Examples:
+CD answers:
 
-* Docker Hub
-* GitHub Container Registry
-* Amazon Elastic Container Registry
+> “How do we safely run this version?”
 
-Push command:
+### CD Responsibilities
 
-```bash
-docker push my-registry/my-app:${GITHUB_SHA}
-```
+* Pull pre-built Docker image
+* Update Kubernetes manifests
+* Apply deployment changes
+* Manage rollout strategy
+* Handle rollback if needed
 
-The registry acts as a centralized artifact store
+### What CD Should NOT Do
 
----
+* Rebuild source code
+* Re-run unit tests
+* Modify application logic
+* Generate new artifacts
 
-## Step 5: Kubernetes Deployment
-
-Kubernetes references the image in a Deployment manifest:
-
-```yaml
-containers:
-  - name: my-app
-    image: my-registry/my-app:abc123
-```
-
-When applied:
-
-```bash
-kubectl apply -f deployment.yaml
-```
-
-Kubernetes performs the following:
-
-1. Schedules a Pod.
-2. The node pulls the image from the registry.
-3. A container is created from the image
-4. The application starts running.
-
-If replicas = 3 → Kubernetes runs 3 identical containers from the same immutable image.
+CD moves artifacts — it does not create them.
 
 ---
 
-# 2️⃣ End-to-End Artifact Flow Diagram
+# 2️⃣ Pipeline Execution Flow (Where Things Happen)
 
-## Architecture Flow
+Understanding ownership prevents production accidents.
 
-![Image](https://miro.medium.com/v2/resize%3Afit%3A2000/1%2ACH2R5552IjZCTqhgaBpXHw.jpeg)
+| Action                    | Responsibility   |
+| ------------------------- | ---------------- |
+| Writing business logic    | Application Code |
+| Writing unit tests        | Application Code |
+| Running tests             | CI Pipeline      |
+| Building Docker image     | CI Pipeline      |
+| Tagging image             | CI Pipeline      |
+| Pushing image to registry | CI Pipeline      |
+| Deploying to Kubernetes   | CD Pipeline      |
+| Updating manifests        | CD Pipeline      |
+| Restarting failed Pods    | Kubernetes       |
+| Rescheduling crashed Pods | Kubernetes       |
 
-![Image](https://miro.medium.com/0%2A3_uIz_YMiyZxMwKn)
+Key idea:
 
-![Image](https://creately.com/static/assets/guides/kubernetes-architecture-diagram/it-and-engineering-kubernetes-architecture-diagram.svg)
+* Code defines behavior
+* CI validates and packages
+* CD deploys artifacts
+* Kubernetes runs and heals workloads
 
-![Image](https://kubernetes.io/images/docs/kubernetes-cluster-architecture.svg)
-
-## Linear Representation
-
-```
-Git Commit / PR Merge
-        ↓
-CI Pipeline (Build + Test)
-        ↓
-Docker Image (Tagged + Digest)
-        ↓
-Container Registry
-        ↓
-Kubernetes Deployment
-        ↓
-Running Containers (Pods)
-```
-
-Export your own clean diagram (PNG) and attach it to the PR.
-
-Keep it minimal and clearly labeled.
+Pipelines orchestrate. Infrastructure executes.
 
 ---
 
-# 3️⃣ Reflection
+# 3️⃣ Responsibility Boundaries (Why Separation Matters)
 
-## Why is deploying immutable Docker images safer than deploying code directly?
+Mixing application logic, pipeline logic, and deployment logic in a single step is dangerous.
 
-Deploying immutable artifacts improves:
+### 1. Blast Radius
 
-### Reliability
+If CI directly deploys code:
 
-The exact same image tested in CI is what runs in production
+* A broken test step could impact production.
+* A build misconfiguration could take down live systems.
 
-### Rollbacks
+Separation limits damage.
 
-Previous image versions can be redeployed instantly without rebuilding
+---
 
-### Traceability
+### 2. PR Review Safety
 
-Each running container maps to:
-Container → Image Tag → Image Digest → Git Commit
+When responsibilities are separated:
 
-This enables precise debugging and auditing.
+* Code changes are reviewed independently.
+* Pipeline changes are reviewed carefully.
+* Deployment logic is isolated.
 
-### Consistency Across Environments
+If everything is mixed:
 
-Development, staging, and production all run the same artifact.
+* Reviewers cannot predict downstream impact.
+* Hidden deployment behavior may exist.
 
-Direct code deployment introduces:
+---
 
-* Dependency drift
-* Environment inconsistencies
-* Hard-to-debug runtime changes
+### 3. Predictability
 
-Immutable Docker images eliminate these risks.
+Artifact-based deployment guarantees:
+
+Code → Docker Image → Deployment
+
+If CI builds an image and CD deploys that exact image:
+
+* What was tested is exactly what runs.
+
+If code is deployed directly:
+
+* Environment drift
+* Untracked differences
+* Harder rollbacks
+
+---
+
+### 4. Rollback Reliability
+
+With artifact-based deployment:
+
+* CD can redeploy a previous image tag.
+* ReplicaSets track revision history.
+* Rollback is deterministic.
+
+If code is rebuilt during deployment:
+
+* The rebuilt version may not match the original.
+* Rollback becomes unreliable.
+
+Clear boundaries enable safe recovery.
+
+---
+
+# 4️⃣ Pipeline Change Impact Analysis
+
+You must reason about impact before merging pipeline changes.
+
+---
+
+## Modifying Test Steps in CI
+
+Impact:
+
+* May allow broken code to merge
+* May falsely fail valid builds
+* Directly affects validation quality
+
+If test coverage decreases → production risk increases.
+
+---
+
+## Modifying Build/Image Creation Steps
+
+Impact:
+
+* Changes artifact structure
+* May introduce runtime failures
+* Could break container startup
+
+This affects everything downstream because CD deploys the produced artifact.
+
+---
+
+## Modifying Deployment Steps in CD
+
+Impact:
+
+* Changes rollout behavior
+* May affect production traffic
+* Could cause downtime
+* Could disable rollback logic
+
+Deployment logic has direct production impact. It requires careful review.
+
+---
+
+# 5️⃣ CI/CD Execution Model Diagram
+
+## Execution Flow
+
+![Image](https://cdn.sanity.io/images/lofvu8al/production/e37ce13c88889f048aa2b1acae7d6cbfeea5678f-2048x876.png)
+
+![Image](https://miro.medium.com/0%2AneovUAYgPR1UlMl4.png)
+
+![Image](https://media2.dev.to/dynamic/image/width%3D800%2Cheight%3D%2Cfit%3Dscale-down%2Cgravity%3Dauto%2Cformat%3Dauto/https%3A%2F%2Fdev-to-uploads.s3.amazonaws.com%2Fuploads%2Farticles%2Fxolzvw5562ewy0a26emj.png)
+
+![Image](https://miro.medium.com/v2/resize%3Afit%3A1200/1%2AUx9raDEMqqyWrgz3lMppQA.jpeg)
+
+### Logical Flow Representation
+
+```
+Code Change
+   ↓
+CI Pipeline (Tests + Build)
+   ↓
+Docker Image (Artifact)
+   ↓
+CD Pipeline (Deploy)
+   ↓
+Kubernetes / Cloud Infrastructure
+```
+
+Export a clean version as PNG and attach it in your PR.
+
+---
+
+# 6️⃣ Reflection
+
+## Why Should Pipelines Orchestrate Instead of Replace Logic?
+
+Pipelines should orchestrate work — not replace application or infrastructure logic.
+
+Because:
+
+* Application code owns business behavior.
+* CI owns validation and artifact creation.
+* CD owns deployment.
+* Infrastructure owns execution and self-healing.
+
+If pipelines replace infrastructure logic:
+
+* They become tightly coupled.
+* Failures become unpredictable.
+* Ownership becomes unclear.
+
+Clear ownership enables:
+
+* Safer automation
+* Smaller blast radius
+* Easier debugging
+* Predictable rollbacks
+* Maintainable systems
+
+Automation without responsibility boundaries creates chaos.
+
+---

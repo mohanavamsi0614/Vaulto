@@ -1,194 +1,312 @@
+
+
 ## Overview
 
-This document explains the complete lifecycle of an application artifact — from a Git commit to running containers inside a Kubernetes cluster
----
+This document explains how Kubernetes manages the lifecycle of an application — from deployment creation to pod scheduling, health management, rollouts, failures, and self-healing.
 
-# 1️⃣ Artifact Flow Explanation
-
-## Step 1: Git Commit / PR Merge → CI Trigger
-
-When a developer pushes code or merges a Pull Request into the `main` branch, a webhook event triggers the CI pipeline.
-
-Example GitHub Actions trigger:
-
-```yaml
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-```
-
-The CI system automatically starts the workflow. No manual deployment is required.
+Kubernetes operates using a **desired state model**, continuously reconciling actual cluster state with declared configuration.
 
 ---
 
-## Step 2: CI Pipeline Builds Docker Image
+# 1️⃣ Deployment → ReplicaSet → Pods (Lifecycle Core)
 
-Inside the CI pipeline:
+## Deployment: Defining Desired State
 
-1. Repository source code is checked out.
-2. Dependencies are installed.
-3. Automated tests are executed.
-4. If tests pass, a Docker image is built.
+A **Deployment** defines the desired state of an application:
+
+* Container image
+* Number of replicas
+* Resource requirements
+* Health probes
+* Update strategy
 
 Example:
 
-```bash
-docker build -t my-app:latest .
+```yaml
+replicas: 3
+image: my-app:v2
 ```
 
-The `Dockerfile` defines:
+This means:
 
-* Base runtime image
-* Application dependencies
-* Build steps
-* Startup command
+> “There must always be 3 healthy Pods running this image.”
 
-This process creates an immutable Docker image containing:
-
-* Application code
-* Runtime
-* Dependencies
-* Configuration
+Kubernetes does not directly create Pods from a Deployment.
+Instead, it creates a ReplicaSet.
 
 ---
 
-## Step 3: Image Tagging & Digest
+## ReplicaSet: Maintaining Desired State
 
-During the build process, the image is tagged.
+When a Deployment is applied:
 
-Common strategies:
+1. Kubernetes creates a **ReplicaSet**
+2. The ReplicaSet creates the specified number of Pods
+3. It continuously monitors pod count
 
-* `latest`
-* Git commit SHA
-* Semantic version (e.g., v1.0.0)
+If:
+
+* A Pod crashes → ReplicaSet creates a new one
+* A Node fails → Pods are recreated on another node
+* Replicas increase → new Pods are created
+* Replicas decrease → Pods are terminated
+
+ReplicaSets are the **self-healing enforcement mechanism** behind Deployments.
+
+---
+
+## Pod Creation & Scheduling
+
+After the ReplicaSet creates a Pod:
+
+1. The Pod enters `Pending`
+2. The Scheduler selects a suitable Node based on:
+
+   * CPU & memory requests
+   * Node availability
+   * Taints & tolerations
+3. The kubelet on the chosen Node:
+
+   * Pulls the container image
+   * Starts the container
+   * Reports status back to the API server
+
+Once the container starts and passes health checks, the Pod becomes `Running`.
+
+---
+
+## Desired State vs Current State (Reconciliation)
+
+Kubernetes continuously compares:
+
+* Desired state (from Deployment spec)
+* Current state (actual Pods running)
+
+If they differ, Kubernetes reconciles automatically.
 
 Example:
+Desired = 3 Pods
+Current = 2 Pods
 
-```bash
-docker tag my-app my-registry/my-app:${GITHUB_SHA}
-```
+Action → Create 1 new Pod
 
-Each image also gets a **digest** (SHA256 hash).
-
-* **Tag** → Human-readable label
-* **Digest** → Cryptographic identity of the image contents
-
-Tags can move. Digests are immutable.
+Kubernetes guarantees **state correction**, not application correctness.
 
 ---
 
-## Step 4: Push to Container Registry
+# 2️⃣ Deployment & Rolling Update Mechanics
 
-After tagging, CI authenticates and pushes the image to a container registry.
+## Rolling Update Strategy (Default)
 
-Examples:
+When a new image version is deployed:
 
-* Docker Hub
-* GitHub Container Registry
-* Amazon Elastic Container Registry
+1. A new ReplicaSet is created.
+2. New Pods are started with the new image.
+3. Old Pods are gradually terminated.
+4. Traffic shifts incrementally.
+5. Availability is maintained.
 
-Push command:
+Kubernetes ensures:
 
-```bash
-docker push my-registry/my-app:${GITHUB_SHA}
-```
-
-The registry acts as a centralized artifact store.
-
----
-
-## Step 5: Kubernetes Deployment
-
-Kubernetes references the image in a Deployment manifest:
-
-```yaml
-containers:
-  - name: my-app
-    image: my-registry/my-app:abc123
-```
-
-When applied:
-
-```bash
-kubectl apply -f deployment.yaml
-```
-
-Kubernetes performs the following:
-
-1. Schedules a Pod.
-2. The node pulls the image from the registry.
-3. A container is created from the image.
-4. The application starts running.
-
-If replicas = 3 → Kubernetes runs 3 identical containers from the same immutable image.
+* Some old Pods remain running
+* New Pods must become Ready before scaling down old ones
 
 ---
 
-# 2️⃣ End-to-End Artifact Flow Diagram
+## Successful Rollout
 
-## Architecture Flow
+A rollout is successful when:
 
-![Image](https://miro.medium.com/v2/resize%3Afit%3A2000/1%2ACH2R5552IjZCTqhgaBpXHw.jpeg)
-
-![Image](https://miro.medium.com/0%2A3_uIz_YMiyZxMwKn)
-
-![Image](https://creately.com/static/assets/guides/kubernetes-architecture-diagram/it-and-engineering-kubernetes-architecture-diagram.svg)
-
-![Image](https://kubernetes.io/images/docs/kubernetes-cluster-architecture.svg)
-
-## Linear Representation
-
-```
-Git Commit / PR Merge
-        ↓
-CI Pipeline (Build + Test)
-        ↓
-Docker Image (Tagged + Digest)
-        ↓
-Container Registry
-        ↓
-Kubernetes Deployment
-        ↓
-Running Containers (Pods)
-```
-
-Export your own clean diagram (PNG) and attach it to the PR.
-
-Keep it minimal and clearly labeled.
+* All new Pods are `Ready`
+* Old ReplicaSet scales down to zero
+* Deployment status shows updated replicas = desired replicas
 
 ---
 
-# 3️⃣ Reflection
+## Failed Rollout
 
-## Why is deploying immutable Docker images safer than deploying code directly?
+Rollout may fail if:
 
-Deploying immutable artifacts improves:
+* New Pods fail readiness probes
+* Containers crash (CrashLoopBackOff)
+* Resource constraints prevent scheduling
 
-### Reliability
+In this case:
 
-The exact same image tested in CI is what runs in production.
+* Old ReplicaSet remains available
+* Deployment can be rolled back
+* Kubernetes halts further scaling
 
-### Rollbacks
+ReplicaSets track revision history, enabling rollback.
 
-Previous image versions can be redeployed instantly without rebuilding.
+---
 
-### Traceability
+# 3️⃣ Health Probes & Resource Configuration
 
-Each running container maps to:
-Container → Image Tag → Image Digest → Git Commit
+## Liveness Probe
 
-This enables precise debugging and auditing.
+Checks if the container is alive.
 
-### Consistency Across Environments
+If it fails:
 
-Development, staging, and production all run the same artifact.
+* Container is restarted.
 
-Direct code deployment introduces:
+Misconfiguration → infinite restarts → CrashLoopBackOff.
 
-* Dependency drift
-* Environment inconsistencies
-* Hard-to-debug runtime changes
+---
 
-Immutable Docker images eliminate these risks.
+## Readiness Probe
+
+Checks if the Pod is ready to receive traffic.
+
+If it fails:
+
+* Pod is removed from Service endpoints.
+* Traffic is not routed to it.
+
+Incorrect readiness probes often cause:
+
+* Deployment appearing stuck
+* Partial outages
+
+---
+
+## Startup Probe
+
+Used for slow-starting applications.
+
+Prevents liveness checks from killing containers prematurely during startup.
+
+---
+
+## CPU & Memory Requests
+
+Requests determine:
+
+* Scheduling eligibility
+
+If requests are too high:
+
+* Pod remains `Pending`
+* Scheduler cannot place it
+
+---
+
+## CPU & Memory Limits
+
+Limits control runtime behavior.
+
+* CPU limit exceeded → throttling
+* Memory limit exceeded → Pod is `OOMKilled`
+
+Incorrect limits frequently cause production instability.
+
+---
+
+# 4️⃣ Common Pod States & Failure Conditions
+
+## Pending
+
+**Meaning:** Pod not scheduled yet
+**Causes:**
+
+* Insufficient resources
+* Unsatisfiable node constraints
+  **Kubernetes Response:** Keeps retrying scheduling
+
+---
+
+## CrashLoopBackOff
+
+**Meaning:** Container repeatedly crashes
+**Causes:**
+
+* Application bug
+* Misconfigured environment variables
+* Failing liveness probe
+  **Kubernetes Response:** Restarts container with exponential backoff
+
+---
+
+## ImagePullBackOff
+
+**Meaning:** Image cannot be pulled
+**Causes:**
+
+* Wrong image name
+* Authentication failure
+* Registry unavailable
+  **Kubernetes Response:** Retries image pull
+
+---
+
+## OOMKilled
+
+**Meaning:** Container exceeded memory limit
+**Cause:** Memory usage > defined limit
+**Kubernetes Response:** Terminates container and restarts
+
+---
+
+# 5️⃣ Kubernetes Lifecycle Diagram
+
+## Application Flow
+
+![Image](https://substackcdn.com/image/fetch/%24s_%214KwS%21%2Cf_auto%2Cq_auto%3Agood%2Cfl_progressive%3Asteep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fcc0a7875-ee23-4906-adc7-b3d6b47ced0e_2252x2752.png)
+
+![Image](https://iximiuz.com/kubernetes-vs-age-old-infra-patterns/kubernetes-service-min.png)
+
+![Image](https://miro.medium.com/v2/resize%3Afit%3A1400/1%2AV3grVwrlokIKTH2rvoY-lg.png)
+
+![Image](https://kubernetes.io/docs/tutorials/kubernetes-basics/public/images/module_06_rollingupdates2.svg)
+
+### Logical Flow Representation
+
+```
+Deployment
+   ↓
+ReplicaSet
+   ↓
+Pod Creation
+   ↓
+Scheduling
+   ↓
+Container Start
+   ↓
+Health Checks
+   ↓
+Running / Restart / Reschedule
+```
+
+Export a clean labeled diagram as PNG and include it in the PR.
+
+---
+
+# 6️⃣ Reflection
+
+## Why Does Kubernetes Maintain Desired State Instead of Guaranteeing Application Correctness?
+
+Kubernetes focuses on maintaining desired state because:
+
+* It is a platform, not an application debugger.
+* It ensures infrastructure-level reliability.
+* It automates recovery through self-healing.
+* It continuously reconciles state without manual intervention.
+
+Kubernetes guarantees:
+
+* Correct number of replicas
+* Pod restarts on failure
+* Rescheduling on node failure
+* Traffic routing based on readiness
+
+It does NOT guarantee:
+
+* Your application logic is correct
+* Your code won’t crash
+* Your memory usage is optimal
+
+Platform responsibility ends at infrastructure correctness.
+Application correctness is the developer’s responsibility.
+
+This separation enables scalable automation and reliability.

@@ -120,7 +120,7 @@ Kubernetes performs the following:
 
 1. Schedules a Pod.
 2. The node pulls the image from the registry.
-3. A container is created from the image.
+3. A container is created from the image
 4. The application starts running.
 
 If replicas = 3 → Kubernetes runs 3 identical containers from the same immutable image.

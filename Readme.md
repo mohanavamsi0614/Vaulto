@@ -1,7 +1,6 @@
 ## Overview
 
-This document explains the complete lifecycle of an application artifact — from a Git commit to running containers inside a Kubernetes cluster.
-
+This document explains the complete lifecycle of an application artifact — from a Git commit to running containers inside a Kubernetes cluster
 ---
 
 # 1️⃣ Artifact Flow Explanation

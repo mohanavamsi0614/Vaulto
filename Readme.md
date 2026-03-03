@@ -96,7 +96,7 @@ Push command:
 docker push my-registry/my-app:${GITHUB_SHA}
 ```
 
-The registry acts as a centralized artifact store.
+The registry acts as a centralized artifact store
 
 ---
 
